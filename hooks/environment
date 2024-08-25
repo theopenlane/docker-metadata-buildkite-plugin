@@ -1,0 +1,153 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# Creates tags and labels to use for a Docker image.
+# The output is stored in the $DOCKER_METADATA_DIR directory.
+# A `pre-exit` hook is provided to clean up the metadata (removes
+# the directory)
+
+plugin_read_list_into_result() {
+  result=()
+
+  for prefix in "$@" ; do
+    local i=0
+    local parameter="${prefix}_${i}"
+
+    if [[ -n "${!prefix:-}" ]] ; then
+      echo "🚨 Plugin received a string for $prefix, expected an array" >&2
+      exit 1
+    fi
+
+    while [[ -n "${!parameter:-}" ]]; do
+      result+=("${!parameter}")
+      i=$((i+1))
+      parameter="${prefix}_${i}"
+    done
+  done
+
+  [[ ${#result[@]} -gt 0 ]] || return 1
+}
+
+debug_print() {
+  local debug="${BUILDKITE_PLUGIN_DOCKER_METADATA_DEBUG:-}"
+  if [[ "$debug" == "true" ]]; then
+    echo "$@"
+  fi
+}
+
+# Parameters
+############
+
+title="${BUILDKITE_PLUGIN_DOCKER_METADATA_TITLE:-}"
+licenses="${BUILDKITE_PLUGIN_DOCKER_METADATA_LICENSES:-}"
+vendor="${BUILDKITE_PLUGIN_DOCKER_METADATA_VENDOR:-}"
+teams="${BUILDKITE_BUILD_CREATOR_TEAMS:-}"
+
+images=()
+if plugin_read_list_into_result BUILDKITE_PLUGIN_DOCKER_METADATA_IMAGES ; then
+  for arg in "${result[@]}" ; do
+    images+=("${arg}")
+  done
+  unset result
+fi
+
+extra_tags=()
+if plugin_read_list_into_result BUILDKITE_PLUGIN_DOCKER_METADATA_EXTRA_TAGS ; then
+  for arg in "${result[@]}" ; do
+    extra_tags+=("${arg}")
+  done
+  unset result
+fi
+
+git_tag="${BUILDKITE_TAG:-}"
+
+tag_prefix="${BUILDKITE_PLUGIN_DOCKER_METADATA_TAG_PREFIX:-}"
+
+# Input validation
+##################
+
+if [ "${#images[@]}" -eq 0 ]; then
+  echo "🚨 :docker-metadata: specifying an output image is required."
+  exit 1
+fi
+
+# Temporary output definitions
+##############################
+
+docker_tags=()
+docker_labels=()
+
+# Metadata setting logic
+########################
+
+docker_labels+=("org.opencontainers.image.source=$BUILDKITE_REPO")
+docker_labels+=("org.opencontainers.image.revision=$BUILDKITE_COMMIT")
+if [ -n "$git_tag" ]; then
+  docker_labels+=("org.opencontainers.image.version=$git_tag")
+else
+  docker_labels+=("org.opencontainers.image.version=$BUILDKITE_COMMIT")
+fi
+
+docker_labels+=("org.opencontainers.image.created=$(date --iso-8601=seconds 2> /dev/null || date -I'seconds')")
+
+if [ -n "$title" ]; then
+    docker_labels+=("org.opencontainers.image.title=$title")
+fi
+
+if [ -n "$licenses" ]; then
+    docker_labels+=("org.opencontainers.image.licenses=$licenses")
+fi
+
+if [ -n "$vendor" ]; then
+    docker_labels+=("org.opencontainers.image.vendor=$vendor")
+fi
+
+if [ -n "$teams" ]; then
+   docker_labels+=("org.opencontainers.image.authors=$teams")
+fi
+
+for image in "${images[@]}" ; do
+  # Set revision
+  docker_tags+=("${image}:${tag_prefix}${BUILDKITE_COMMIT}")
+
+  # Label for the version/tag
+  if [ -n "$git_tag" ]; then
+    docker_tags+=("${image}:${tag_prefix}${git_tag}")
+  fi
+
+  for tag in "${extra_tags[@]}" ; do
+    docker_tags+=("${image}:${tag_prefix}${tag}")
+  done
+done
+
+# Output
+########
+DOCKER_METADATA_DIR="$(mktemp -d)"
+export DOCKER_METADATA_DIR
+debug_print "🚨 Plugin metadata will be stored in DOCKER_METADATA_DIR"
+debug_print "🚨 DOCKER_METADATA_DIR: '$DOCKER_METADATA_DIR'"
+
+if [ ${#docker_labels[@]} -gt 0 ]; then
+    touch "${DOCKER_METADATA_DIR}/labels"
+    debug_print "-- :docker-metadata: Persisting labels"
+    for label in "${docker_labels[@]}"; do
+        debug_print "- ${label}"
+        echo "$label" >> "${DOCKER_METADATA_DIR}/labels"
+    done
+    debug_print "-- :docker-metadata: Labels available in ${DOCKER_METADATA_DIR}/labels"
+else
+  debug_print "-- :docker-metadata: No labels detected"
+fi
+
+if [ ${#docker_tags[@]} -gt 0 ]; then
+    touch "${DOCKER_METADATA_DIR}/tags"
+    debug_print "-- :docker-metadata: Persisting tags"
+    for tag in "${docker_tags[@]}"; do
+        debug_print "- ${tag}"
+        echo "$tag" >> "${DOCKER_METADATA_DIR}/tags"
+    done
+    debug_print "-- :docker-metadata: Tags available in ${DOCKER_METADATA_DIR}/tags"
+else
+  debug_print "-- :docker-metadata: No tags detected"
+fi
