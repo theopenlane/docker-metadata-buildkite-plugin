@@ -16,7 +16,7 @@ steps:
     plugins:
       - theopenlane/docker-metadata#v1.0.0:
           images:
-          - 'theopenlane/datum'
+          - 'theopenlane/core'
 ```
 
 The default settings will create a tag with the git commit SHA. (e.g. `theopenlane/image:12345678`).
