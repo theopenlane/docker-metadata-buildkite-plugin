@@ -14,7 +14,7 @@ Add the following to your `pipeline.yml`:
 steps:
   - command: ls
     plugins:
-      - theopenlane/docker-metadata#v1.0.0:
+      - theopenlane/docker-metadata#v1.0.1:
           images:
           - 'theopenlane/core'
 ```
